@@ -5,18 +5,15 @@ import os
 import tempfile
 import time
 import base64
-import tempfile
-import shutil
-import os
 from io import BytesIO
 from scipy.signal import decimate
 
 
 # Import utility functions
 from sca_utils_v4 import (
-    generate_synthetic_traces, export_to_wav, load_rf_wav, demodulate_envelope,
-    slice_traces, load_public_dataset, run_cpa, plot_cpa_results,
-    align_traces, align_max_peak, visualize_alignment, compare_keys, plot_full_key_recovery, load_real_sdr_dataset
+    generate_synthetic_traces, export_to_wav, demodulate_envelope,
+    run_cpa, plot_cpa_results,
+    align_traces, align_max_peak, visualize_alignment, compare_keys, plot_full_key_recovery
 )
 
 # Page configuration
@@ -65,15 +62,15 @@ st.title("📡 RF Side-Channel Analysis Pipeline")
 st.markdown(
     """
     This app demonstrates an RF side-channel attack pipeline for AES.
-    Generate, import, process, and attack side-channel traces all in one place.
+    Generate synthetic traces and use them for side-channel analysis.
     """
 )
 
 #-----------------------------------------------------------------------------
 # Create tabs for the workflow
 #-----------------------------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "1. Generate Synthetic", "2. Load Data", "3. Process", "4. CPA Attack", "5. Documentation"
+tab1, tab2, tab3, tab4 = st.tabs([
+    "1. Generate Synthetic", "2. Process", "3. CPA Attack", "4. Documentation"
 ])
 
 #-----------------------------------------------------------------------------
@@ -85,13 +82,13 @@ with tab1:
     # Parameters configuration in two columns
     col1, col2 = st.columns(2)
     with col1:
-        num_traces = st.slider("# of traces", 100, 20000, 5000)
-        samples = st.slider("Samples per trace", 1000, 10000, 5000)
-        fs = st.number_input("Sampling freq (Hz)", 100_000, 10_000_000, 1_000_000)
+        num_traces = st.number_input("# of traces", min_value=100, max_value=20000, value=5000, step=100)
+        samples = st.number_input("Samples per trace", min_value=1000, max_value=10000, value=5000, step=100)
+        fs = st.number_input("Sampling freq (Hz)", min_value=100_000, max_value=10_000_000, value=1_000_000, step=100_000)
     
     with col2:
-        fc = st.number_input("Carrier freq (Hz)", 10_000, 500_000, 100_000)
-        snr        = st.slider("SNR (dB)",     0,   100,  60)
+        fc = st.number_input("Carrier freq (Hz)", min_value=10_000, max_value=500_000, value=100_000, step=10_000)
+        snr = st.number_input("SNR (dB)", min_value=0, max_value=100, value=60, step=5)
         leakage_model = st.selectbox(
             "Leakage Model", 
             ["Hamming Weight (Classic)", "Hamming Distance (Enhanced)"]
@@ -154,7 +151,7 @@ with tab1:
             key_str = ', '.join([f"0x{k:02X}" for k in true_key])
             st.success(f"Generated {num_traces} synthetic traces with key bytes: {key_str}")
     
-  # Export to WAV section
+    # Export to WAV section
     st.subheader("Export Synthetic Traces to WAV")
 
     if st.session_state.get('traces') is not None and st.session_state.data_source == 'synthetic':
@@ -179,281 +176,21 @@ with tab1:
                 # 3) Clean up temp file
                 os.remove(export_path)
 
-
-        if st.button("Create Audible WAV"):
-            # 1) Demodulate the envelope of the first RF trace
-            env = np.hstack([
-                demodulate_envelope(
-                    tr,
-                    st.session_state.fs,
-                    fc=st.session_state.fc,
-                    bw=st.session_state.fs / 2
-                )
-                for tr in st.session_state.traces
-            ])
-
-            # 2) Down-sample into the audible band (44.1 kHz)
-            env_ds = decimate(env, int(st.session_state.fs / 44100))
-
-            # 3) Export to a temporary WAV and offer for download
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp2:
-                export_to_wav(env_ds[np.newaxis, :], 44100, tmp2.name)
-                with open(tmp2.name, "rb") as f2:
-                    wav_bytes = f2.read()
-
-            b64 = base64.b64encode(wav_bytes).decode()
-            href = (
-                f'<a href="data:audio/wav;base64,{b64}" '
-                'download="audible_envelope.wav">Download Audible WAV</a>'
-            )
-            st.markdown(href, unsafe_allow_html=True)
-
-            # Clean up temp file
-            os.remove(tmp2.name)
-
     else:
         st.info("Generate synthetic traces first to enable export.")
 
-
 #-----------------------------------------------------------------------------
-# Tab 2: Load Data
+# Tab 2: Demodulation & Processing
 #-----------------------------------------------------------------------------
 with tab2:
-    st.header("Step 2: Load Data")
-    source = st.radio("Data source:", ["WAV File", "Public HDF5", "Real SDR Demo"])
-
-    # WAV File loading option
-    if source == "WAV File":
-        uploaded_file = st.file_uploader("Upload WAV", type='wav')
-        if uploaded_file:
-            with st.spinner("Loading WAV..."):
-                # Save to temp file and load
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
-                    tmp.write(uploaded_file.getvalue())
-                    path = tmp.name
-                
-                raw, fs = load_rf_wav(path)
-                os.remove(path)  # Clean up
-                
-            # Update session state
-            was_processed = st.session_state.get('processing_done', False)
-            st.session_state.update({
-                'raw_data': raw,
-                'fs': fs,
-                'data_loaded': True,
-                'data_source': 'wav',
-                'processing_done': was_processed
-            })
-            
-            st.success(f"Loaded WAV: {len(raw)} samples @ {fs} Hz.")
-            
-            # Plot raw data sample
-            fig, ax = plt.subplots(figsize=(8, 3))
-            samples_to_plot = min(10000, len(raw))
-            ax.plot(raw[:samples_to_plot])
-            ax.set_title(f"Raw RF Data Sample (First {samples_to_plot} samples)")
-            ax.set_xlabel("Sample")
-            ax.set_ylabel("Amplitude")
-            ax.grid(True)
-            st.pyplot(fig)  
-
-     # HDF5 File loading option
-    elif source == "Public HDF5":
-        st.subheader("Load Public HDF5 Dataset")
-        uploaded_file = st.file_uploader("Upload HDF5", type='h5')
-        if uploaded_file:
-            with st.spinner("Loading dataset..."):
-                # Save to temp file
-                with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as tmp:
-                    tmp.write(uploaded_file.getvalue())
-                    path = tmp.name
-                
-                # Load parameters
-                offset = st.slider("Offset", 0, 10000, 0)
-                count = st.slider("# traces to load", 10, 5000, 1000)
-                
-                # Load the dataset
-                try:
-                    traces, pts, key = load_public_dataset(path, offset, count)
-                    load_success = True
-                    error_msg = None
-                except Exception as e:
-                    load_success = False
-                    error_msg = str(e)
-                
-                os.remove(path)  # Clean up
-            
-            if load_success:
-                # Update session state
-                st.session_state.update({
-                    'traces': traces,
-                    'plaintexts': pts,
-                    'true_key': key[0] if key is not None else None,
-                    'data_loaded': True,
-                    'data_source': 'hdf5',
-                    'processing_done': True
-                })
-                
-                st.success(f"Loaded {len(traces)} traces from dataset.")
-                
-                # Plot example trace
-                fig, ax = plt.subplots(figsize=(8, 3))
-                ax.plot(traces[0])
-                ax.set_title("Example Trace from Dataset")
-                ax.set_xlabel("Sample")
-                ax.set_ylabel("Amplitude")
-                ax.grid(True)
-                st.pyplot(fig)
-                
-                key_info = f"with key byte = 0x{key[0]:02X}" if key is not None else "key not provided"
-                st.success(f"Loaded {len(traces)} traces from dataset {key_info}")
-            else:
-                st.error(f"Error loading dataset: {error_msg}")
-                st.info("Please check that your file is a valid HDF5 dataset with traces and plaintext data.")
-
-
-    elif source == "Real SDR Demo":
-        st.subheader("Real SDR Demo: Upload your I/Q captures")
-        ds = st.selectbox("Dataset format:", ["screaming_channels", "drone_rf_video", "migou_mod"])
-        
-        # NEW: drag-and-drop uploader for SDR files
-        uploaded_files = st.file_uploader(
-            "Drag & drop your SDR dump files here",
-            type=["h5", "bin", "pkl"],
-            accept_multiple_files=True
-        )
-        
-        offset = st.number_input("Trace offset", 0, 10000, 0)
-        count  = st.number_input("Number of traces", 10, 2000, 200)
-        
-        # Only enable the load button once files are present
-        if uploaded_files and st.button("Load SDR Captures"):
-            try:
-                with st.spinner("Loading real SDR traces…"):
-                    # Pass the list of UploadedFile objects instead of a path
-                                # 1) Dump uploads to a temp folder
-                        temp_dir = tempfile.mkdtemp()
-                        for up in uploaded_files:
-                            with open(os.path.join(temp_dir, up.name), "wb") as f:
-                                f.write(up.getvalue())
-
-                        # 2) Load from that folder path (a str), not the list
-                        traces, pts, key = load_real_sdr_dataset(temp_dir, ds, offset, count)
-    
-                        # 3) Clean up
-                        shutil.rmtree(temp_dir)
-
-                
-                st.session_state.update({
-                    'traces': traces,
-                    'plaintexts': pts,
-                    'true_key': key,
-                    'data_loaded': True,
-                    'data_source': 'sdr_real',
-                    'processing_done': True
-                })
-                st.success(f"Loaded {len(traces)} traces from uploaded files")
-                # preview
-                fig, ax = plt.subplots(figsize=(8,3))
-                ax.plot(traces[0])
-                ax.set_title("Example Real SDR Trace")
-                ax.set_xlabel("Sample")
-                ax.set_ylabel("Amplitude")
-                ax.grid(True)
-                st.pyplot(fig)
-            except Exception as e:
-                st.error(f"Failed to load SDR dataset: {e}")
-
-
-#-----------------------------------------------------------------------------
-# Tab 3: Demodulation & Processing
-#-----------------------------------------------------------------------------
-with tab3:
-    st.header("Step 3: Demodulate & Slice")
+    st.header("Step 2: Process Traces")
     
     if not st.session_state.get('data_loaded'):
-        st.warning("Load or generate data first.")
+        st.warning("Generate data first in Step 1.")
     else:
-        # Section 3.1: Demodulate RF Signal (only for WAV data)
-        if st.session_state.data_source == 'wav':
-            st.subheader("3.1 Demodulate RF Signal")
-            
-            fc = st.number_input("Carrier freq (Hz)", 10_000, 500_000, 100_000, key="process_fc")
-            bw = st.slider("Filter bandwidth (Hz)", 1000, 50000, 10000)
-            
-            if st.button("Demodulate Envelope"):
-                with st.spinner("Demodulating..."):
-                    env = demodulate_envelope(
-                        st.session_state.raw_data,
-                        st.session_state.fs,
-                        fc,
-                        bw
-                    )
-                
-                st.session_state.envelope = env
-                st.session_state.fc = fc
-                st.success("Demodulation complete.")
-                
-                # Plot the envelope
-                fig, ax = plt.subplots(figsize=(8, 3))
-                ax.plot(env[:min(10000, len(env))])
-                ax.set_title("Demodulated Envelope")
-                ax.set_xlabel("Sample")
-                ax.set_ylabel("Amplitude")
-                ax.grid(True)
-                st.pyplot(fig)
-            
-            # Section 3.2: Slice into Traces (only if envelope exists)
-            if st.session_state.get('envelope') is not None:
-                st.subheader("3.2 Slice into Traces")
-                
-                duration_ms = st.slider("Trace duration (ms)", 1, 50, 5)
-                duration_sec = duration_ms / 1000
-                
-                # Calculate number of samples per trace
-                samples_per_trace = int(duration_sec * st.session_state.fs)
-                max_traces = len(st.session_state.envelope) // samples_per_trace
-                
-                # Number of traces to extract
-                trace_count = st.slider("# traces to extract", 10, min(500, max_traces), 100)
-                
-                # Offset in samples
-                offset = st.slider("Offset (samples)", 0, 
-                                  len(st.session_state.envelope) - trace_count * samples_per_trace, 0)
-                
-                if st.button("Slice Traces"):
-                    with st.spinner("Slicing..."):
-                        # Slice the envelope into traces
-                        sliced_traces = slice_traces(
-                            st.session_state.envelope,
-                            st.session_state.fs,
-                            duration_sec,
-                            trace_count,
-                            offset
-                        )
-                        
-                        # Generate random plaintexts for the sliced traces
-                        plaintexts = np.random.randint(0, 256, (trace_count, 16), dtype=np.uint8)
-                    
-                    # Update session state
-                    st.session_state.traces = sliced_traces
-                    st.session_state.plaintexts = plaintexts
-                    st.session_state.processing_done = True  
-
-                    st.success("Traces sliced successfully. Ready for CPA attack.")
-                    
-                    # Plot an example trace
-                    fig, ax = plt.subplots(figsize=(8, 3))
-                    ax.plot(sliced_traces[0])
-                    ax.set_title("Example Sliced Trace")
-                    ax.set_xlabel("Sample")
-                    ax.set_ylabel("Amplitude")
-                    ax.grid(True)
-                    st.pyplot(fig)
-        
-        # Section 3.3: Trace Alignment (for all data types if traces exist)
+        # Section 2.1: Trace Alignment
         if st.session_state.get('traces') is not None:
-            st.subheader("3.3 Trace Alignment")
+            st.subheader("2.1 Trace Alignment")
             
             st.write("Align traces to improve attack success rate.")
             
@@ -474,9 +211,9 @@ with tab3:
             if use_window:
                 col1, col2 = st.columns(2)
                 with col1:
-                    window_start = st.slider("Window Start (%)", 0, 100, 25)
+                    window_start = st.number_input("Window Start (%)", min_value=0, max_value=100, value=25, step=5)
                 with col2:
-                    window_end = st.slider("Window End (%)", 0, 100, 75)
+                    window_end = st.number_input("Window End (%)", min_value=0, max_value=100, value=75, step=5)
             else:
                 window_start = 0
                 window_end = 100
@@ -518,10 +255,10 @@ with tab3:
                         st.info("Keeping original traces. You can switch to aligned traces later.")
 
 #-----------------------------------------------------------------------------
-# Tab 4: Run CPA
+# Tab 3: Run CPA
 #-----------------------------------------------------------------------------
-with tab4:
-    st.header("Step 4: Correlation Power Analysis")
+with tab3:
+    st.header("Step 3: Correlation Power Analysis")
     
     # Verify necessary data is available
     data_ready = (st.session_state.get('processing_done') and 
@@ -529,7 +266,7 @@ with tab4:
                  st.session_state.get('plaintexts') is not None)
     
     if not data_ready:
-        st.warning("Process data first before running CPA.")
+        st.warning("Generate data first in Step 1.")
         
         # Show debugging information in expandable section
         debug_info = {
@@ -588,6 +325,9 @@ with tab4:
                         correlations_all.append(cor)
                         max_correlations_all.append(mcor)
                         recovered_key[byte_idx] = best
+                        
+                        # Update progress
+                        progress_bar.progress((byte_idx + 1) / 16)
                     
                     progress_bar.progress(100)
                     end_time = time.time()
@@ -620,7 +360,7 @@ with tab4:
         #-------------------------
         else:
             # Target byte index
-            byte_index = st.slider("Target byte index", 0, 15, 0)
+            byte_index = st.number_input("Target byte index", min_value=0, max_value=15, value=0, step=1)
             
             # Option to use vectorized implementation
             use_vectorized = st.checkbox("Use vectorized implementation", value=True)
@@ -631,7 +371,7 @@ with tab4:
                     progress_bar = st.progress(0)
                     
                     # Run CPA
-                   # 1) Align traces so the leakage bump lines up
+                    # 1) Align traces so the leakage bump lines up
                     from sca_utils_v4 import align_max_peak
                     aligned = align_max_peak(st.session_state.traces)
 
@@ -641,7 +381,7 @@ with tab4:
                         aligned,
                         st.session_state.plaintexts,
                         byte_index,
-                        vectorized=False        # force sample‑by‑sample CPA
+                        vectorized=use_vectorized
                     )
                     progress_bar.progress(100)
                     end_time = time.time()
@@ -716,71 +456,49 @@ with tab4:
                                 st.write(f"True key actual rank: {true_rank} out of 256")
 
 #-----------------------------------------------------------------------------
-# Tab 5: Documentation & Overview
+# Tab 4: Documentation & Overview
 #-----------------------------------------------------------------------------
-with tab5:
+with tab4:
     st.header("Documentation & Overview")
 
-    st.markdown("""\ 
-    ## RF Side‑Channel Attack Pipeline (v4)
+    st.markdown(""" 
+    ## RF Side‑Channel Attack Pipeline (Simplified Version)
 
     This application demonstrates a complete side‑channel attack pipeline targeting
     the first round of AES encryption by exploiting RF/em emissions or power leakage.
     It uses Correlation Power Analysis (CPA) to recover secret keys through the
     following modular workflow:
     
-    ### 1. Generate Synthetic
+    ### 1. Generate Synthetic Traces
     - Adjust carrier frequency (`fc`), sampling rate (`fs`), noise level (SNR), and number of traces.
     - Choose **Hamming‑weight** or **Hamming‑distance (toggle‑count)** leakage models.
-    - **Export to WAV** for offline CPA.
-    - **Export Audible Audio**: down‑sample envelope to 44.1 kHz for listening demos (not CPA‑processable).
+    - **Export to WAV** for offline analysis.
+    - **Export Audible Audio**: down‑sample envelope to 44.1 kHz for listening demos.
     
-    ### 2. Load Data
-    - Import RF traces from WAV files (synthetic or live SDR captures).
-    - Load public HDF5 datasets: ASCAD (GitHub) and SPERO (GitHub).
-    - Support for offline WAV, HDF5, and raw SDR dump formats.
+    ### 2. Process Traces
+    - **Alignment**: cross‑correlation, SAD, or peak‑based alignment to improve attack success.
 
-    ### 3. Signal Processing
-    - **Demodulation**: Butterworth band‑pass filter + Hilbert transform.
-    - **Alignment**: cross‑correlation, SAD, or peak‑based alignment.
-    - **Slicing**: segment continuous data into fixed‑length traces per byte.
-
-    ### 4. CPA Attack
+    ### 3. CPA Attack
     - **Single‑byte** and **Full‑key** modes.
     - **Per‑sample** and **Vectorized** implementations for speed.
     - Interactive plots: correlation vs. sample index, recovered key table.
 
-    ### 5. Documentation (this tab)
-    - This overview, step descriptions, and example plots.
+    ### 4. Documentation (this tab)
+    - This overview and step descriptions.
 
-    ### 6. About
-    - Version history, change log, and attribution.
-
-    **Tip: Increasing Upload Size for Large WAVs**
-
-    To allow larger file uploads, start the app with:
-    ```bash
-    streamlit run appv4.py --server.maxUploadSize=16384
-    ```
-    *(Value in KB → 16384 KB = 16 MB)*  
-    Alternatively, create `./.streamlit/config.toml`:
-    ```toml
-    [server]
-    maxUploadSize = 16384
-    ```
-    Then run `streamlit run appv4.py` normally.
+    ### About Side-Channel Analysis
+    Side-channel analysis exploits physical leakage (power consumption, electromagnetic emanations) 
+    from electronic devices to extract secret information. This app demonstrates how correlation 
+    analysis can be used to recover cryptographic keys by analyzing the relationship between 
+    the processed data and the measured signals.
     """)
 
     # References
-    st.markdown("""\ 
-    **Key References & Datasets**  
+    st.markdown("""
+    **Key References**  
     - Mangard, Oswald & Popp, *Power Analysis Attacks: Revealing the Secrets of Smartcards* (2007)  
     - Guilley, Danger & Quisquater, *Electromagnetic Side‑Channel Analysis: From Theory to Practice* (2015)  
     - Collins *et al.*, *Software Defined Radio for Engineers* (2018)  
-    - ASCAD Dataset: https://github.com/ANSSI-FR/ASCAD  
-    - SPERO Dataset: https://github.com/YunkaiUF/SPERO  
-    - Zenodo RF Traces: https://zenodo.org/records/4264467  
-    - Mendeley Side‑Channel: https://data.mendeley.com/datasets/fkwr8mzndr/1  
     """)
 
     # Example trace preview
@@ -789,11 +507,11 @@ with tab5:
         fig, ax = plt.subplots(figsize=(10, 4))
         ax.plot(traces[0])
         ax.set(
-            title="Example Demodulated Trace (Envelope)",
+            title="Example Trace",
             xlabel="Sample Index",
             ylabel="Amplitude"
         )
         ax.grid(True)
         st.pyplot(fig)
     else:
-        st.info("No traces available. Please generate or load data in Steps 1 or 2 above.")
+        st.info("No traces available. Please generate data in Step 1.")
