@@ -11,9 +11,9 @@ from scipy.signal import decimate
 
 # Import utility functions
 from sca_utils_v4 import (
-    generate_synthetic_traces, export_to_wav, demodulate_envelope,
+    generate_synthetic_traces, export_to_wav,
     run_cpa, plot_cpa_results,
-    align_traces, align_max_peak, visualize_alignment, compare_keys, plot_full_key_recovery
+    align_traces, visualize_alignment, compare_keys, plot_full_key_recovery
 )
 
 # Page configuration
