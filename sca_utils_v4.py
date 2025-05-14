@@ -68,6 +68,7 @@ def generate_synthetic_traces(num_traces=1000, samples_per_trace=5000, fs=100000
     # Generate traces
     traces = np.zeros((num_traces, samples_per_trace))
     
+    #hamming distance
     if enhanced_model:
         # Enhanced model with multiple leakage points
         # Define AES operation points (relative positions in the trace)

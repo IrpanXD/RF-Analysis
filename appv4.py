@@ -462,7 +462,7 @@ with tab4:
     st.header("Documentation & Overview")
 
     st.markdown(""" 
-    ## RF Side‑Channel Attack Pipeline (Simplified Version)
+    ## RF Side‑Channel Attack Pipeline
 
     This application demonstrates a complete side‑channel attack pipeline targeting
     the first round of AES encryption by exploiting RF/em emissions or power leakage.
