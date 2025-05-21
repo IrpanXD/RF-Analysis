@@ -29,14 +29,15 @@ jobs:
           
       - name: Build static site
         run: |
-          mkdir -p build
-          streamlit_static run appv4.py --output-dir=build
-          cp -r assets build/ || true
+          mkdir -p _site
+          streamlit_static run appv4.py --output-dir=_site
+          cp -r assets _site/ || true
+          cp index.html _site/ || true
           
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v1
         with:
-          path: ./build
+          path: ./_site
           
   deploy:
     needs: build
